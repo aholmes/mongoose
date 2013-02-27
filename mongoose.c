@@ -29,6 +29,13 @@
 #define __STDC_LIMIT_MACROS   // C++ wants that for INT64_MAX
 #endif
 
+#if defined(_POSIX_C_SOURCE) || defined(_SVID_SOURCE) || defined(_XOPEN_SOURCE) || defined(_XOPEN_SOURCE_EXTENDED)
+#if _POSIX_C_SOURCE >= 200809L || _SVID_SOURCE || _XOPEN_SOURCE >= 500 || _XOPEN_SOURCE && _XOPEN_SOURCE_EXTENDED
+#include <sys/types.h>
+#include <sys/wait.h>
+#endif
+#endif
+
 #if defined (_MSC_VER)
 // conditional expression is constant: introduced by FD_SET(..)
 #pragma warning (disable : 4127)
@@ -4058,6 +4065,119 @@ static void handle_lsp_request(struct mg_connection *conn, const char *path,
 }
 #endif // USE_LUA
 
+#ifdef USE_PHP
+struct php_State {
+	char **argv;
+	char **envp;
+};
+
+static void prepare_php_environment(struct mg_connection *conn, const char *path, struct php_State *P) {
+//  const struct mg_request_info *ri = mg_get_request_info(conn);
+//  int i;
+//
+//  // Register "print" function which calls mg_write()
+//  lua_pushlightuserdata(L, conn);
+//  lua_pushcclosure(L, lsp_mg_print, 1);
+//  lua_setglobal(L, "print");
+//
+//  // Register mg_read()
+//  lua_pushlightuserdata(L, conn);
+//  lua_pushcclosure(L, lsp_mg_read, 1);
+//  lua_setglobal(L, "read");
+//
+//  // Export request_info
+//  lua_newtable(L);
+//  reg_string(L, "request_method", ri->request_method);
+//  reg_string(L, "uri", ri->uri);
+//  reg_string(L, "http_version", ri->http_version);
+//  reg_string(L, "query_string", ri->query_string);
+//  reg_int(L, "remote_ip", ri->remote_ip);
+//  reg_int(L, "remote_port", ri->remote_port);
+//  reg_int(L, "num_headers", ri->num_headers);
+//  lua_pushstring(L, "http_headers");
+//  lua_newtable(L);
+//  for (i = 0; i < ri->num_headers; i++) {
+//    reg_string(L, ri->http_headers[i].name, ri->http_headers[i].value);
+//  }
+//  lua_rawset(L, -3);
+//  lua_setglobal(L, "request_info");
+
+  // _POST
+  int size = 0;
+  char *testStr = "_POST=a test";
+  struct php_State _P;
+
+  (void)conn;
+
+  //_P = malloc(sizeof(php_State));
+  _P.argv = malloc(sizeof(char) * 2);
+  _P.envp = malloc(sizeof(char) * 1);
+
+  _P.argv[0] = "/usr/bin/php";
+
+  size = (sizeof(char) * strlen(path)) + 1;
+  _P.argv[1] = malloc(size);
+  memcpy(_P.argv[1], path, size);
+
+  size = (sizeof(char) * strlen(testStr)) + 1;
+  _P.envp[0] = malloc(size);
+  memcpy(_P.envp[0], testStr, size);
+
+  *P = _P;
+}
+
+static void handle_php_request(struct mg_connection *conn, const char *path,
+                               struct file *filep) {
+  //void *p = NULL;
+  struct php_State P;
+  pid_t pid = -1;
+  int status = 0;
+
+  if (!mg_stat(conn, path, filep) || !mg_fopen(conn, path, "r", filep)) {
+    send_http_error(conn, 404, "Not Found", "%s", "File not found");
+//  } else if (filep->membuf == NULL &&
+//             (p = mmap(NULL, (size_t) filep->size, PROT_READ, MAP_PRIVATE,
+//                       fileno(filep->fp), 0)) == MAP_FAILED) {
+//    send_http_error(conn, 500, http_500_error, "mmap(%s, %zu, %d): %s", path,
+//                    (size_t) filep->size, fileno(filep->fp), strerror(errno));
+//  } else if ((L = luaL_newstate()) == NULL) {
+//    send_http_error(conn, 500, http_500_error, "%s", "luaL_newstate failed");
+  } else {
+    // We're not sending HTTP headers here, Lua page must do it.
+    prepare_php_environment(conn, path, &P);
+
+printf("Bin: %s\nPath: %s\nEnv: %s\n", P.argv[0], P.argv[1], P.envp[0]);
+
+    pid = fork();
+  
+    if (pid == -1) {
+      send_http_error(conn, 500, "Internal Server Error", "%s", "Failed to execute PHP script");
+      exit(-1);
+    }
+  
+    // wait for the child to finish
+    if (pid) {
+      waitpid(pid, &status, 0);
+      printf("Child status: %d. WIFEXITED %d\n", status, WIFEXITED(status));
+
+    } else {
+      if (execve("/usr/bin/php", P.argv, P.envp) == -1) {
+	      printf("Could not run\n");
+	      send_http_error(conn, 500, "Internal Server Error", "%s", "Child could not execute PHP");
+      }
+    }
+//    if (conn->ctx->callbacks.init_lua != NULL) {
+//      conn->ctx->callbacks.init_lua(conn, L);
+//    }
+//    lsp(conn, filep->membuf == NULL ? p : filep->membuf, filep->size, L);
+  }
+
+//  if (L) lua_close(L);
+//  if (p) munmap(p, filep->size);
+  mg_fclose(filep);
+}
+#endif // USE_PHP
+
 int mg_upload(struct mg_connection *conn, const char *destination_dir) {
   const char *content_type_header, *boundary_start;
   char buf[MG_BUF_LEN], path[PATH_MAX], fname[1024], boundary[100], *s;
@@ -4268,6 +4388,10 @@ static void handle_request(struct mg_connection *conn) {
 #ifdef USE_LUA
   } else if (match_prefix("**.lp$", 6, path) > 0) {
     handle_lsp_request(conn, path, &file);
+#endif
+#ifdef USE_PHP
+  } else if (match_prefix("**.php$", 6, path) > 0) {
+    handle_php_request(conn, path, &file);
 #endif
 #if !defined(NO_CGI)
   } else if (match_prefix(conn->ctx->config[CGI_EXTENSIONS],

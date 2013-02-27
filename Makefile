@@ -15,6 +15,7 @@
 # -DSSL_LIB=\"libssl.so.<version>\"   - use system versioned SSL shared object
 # -DCRYPTO_LIB=\"libcrypto.so.<version>\" - use system versioned CRYPTO so
 # -DUSE_LUA               - embed Lua in Mongoose (+100kb)
+# -DUSE_PHP               - embed PHP interpreter in Mongoose (+100kb)
 
 PROG        = mongoose
 CFLAGS      = -std=c99 -O2 -W -Wall -pedantic -pthread $(COPT)
@@ -77,6 +78,9 @@ all:
 # To build with lua, make sure you have Lua unpacked into lua-5.2.1 directory
 linux_lua:
 	$(CC) mongoose.c main.c $(LUA_SOURCES) -DUSE_LUA -I$(LUA) -o $(PROG) -ldl $(CFLAGS)
+
+linux_php:
+	$(CC) mongoose.c main.c -DUSE_PHP -o $(PROG) -ldl $(CFLAGS)
 
 # Make sure that the compiler flags come last in the compilation string.
 # If not so, this can break some on some Linux distros which use
